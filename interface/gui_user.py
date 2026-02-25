@@ -3,7 +3,7 @@ gui_user.py
 Giao diện User Đa Năng (Voter + Authority).
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import sys, os, time, json
 from pathlib import Path
 
@@ -90,27 +90,22 @@ class MainAppFrame(tk.Frame):
         tk.Frame.__init__(self, parent)
         self.controller = controller
         
-        # Bọc header và nút đăng xuất vào chung 1 Frame nằm ngang cho đẹp
         header_frame = tk.Frame(self)
         header_frame.pack(fill="x", padx=10, pady=10)
 
         self.lbl_header = tk.Label(header_frame, text="Xin chào!", font=("Arial", 12, "bold"), fg="#1976D2")
         self.lbl_header.pack(side=tk.LEFT)
 
-        # Nút Đăng xuất nằm góc phải
         tk.Button(header_frame, text="🚪 Đăng xuất", bg="#757575", fg="white", 
                   font=("Arial", 9, "bold"), command=self.do_logout).pack(side=tk.RIGHT)
 
-        # Tạo Tabs
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Tab 1: Đi Vote
         self.tab_vote = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_vote, text="🗳️ Tham gia Bỏ phiếu")
         self.setup_vote_tab()
 
-        # Tab 2: Tạo Phòng
         self.tab_manage = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_manage, text="👑 Quản lý Phòng của tôi")
         self.setup_manage_tab()
@@ -119,21 +114,18 @@ class MainAppFrame(tk.Frame):
         self.lbl_header.config(text=f"Xin chào: {CURRENT_USER['full_name']} | Role: {CURRENT_USER['role']}")
         self.load_public_elections()
         self.load_my_elections()
+
     def do_logout(self):
         global CURRENT_USER
         if CURRENT_USER:
-            # 1. Gọi DB để set is_online = FALSE
             db.logout_user(CURRENT_USER['id'])
-            # 2. Xóa biến phiên làm việc hiện tại
             CURRENT_USER = None
             
-        # 3. Xóa sạch dữ liệu trên các bảng để người sau đăng nhập không nhìn thấy data của người trước
         for item in self.tree_elections.get_children():
             self.tree_elections.delete(item)
         for item in self.tree_my_rooms.get_children():
             self.tree_my_rooms.delete(item)
             
-        # 4. Chuyển giao diện về lại màn hình Đăng nhập
         self.controller.show_frame("LoginFrame")
 
     # ================= TAB 1: ĐI VOTE =================
@@ -150,13 +142,11 @@ class MainAppFrame(tk.Frame):
         self.tree_elections.column("id", width=50)
         self.tree_elections.pack(fill="x", padx=10, pady=10)
 
-        # Nút Vào phòng chuyên nghiệp, có thể double-click thẳng vào bảng
         tk.Button(self.tab_vote, text="🚪 VÀO PHÒNG BỎ PHIẾU", bg="#4CAF50", fg="white", 
                   font=("Arial", 12, "bold"), command=self.open_room_popup).pack(pady=10)
         self.tree_elections.bind("<Double-1>", lambda event: self.open_room_popup())
 
     def load_public_elections(self):
-        """Hàm load danh sách phòng bầu cử (đã được khôi phục)"""
         for item in self.tree_elections.get_children():
             self.tree_elections.delete(item)
         elections = db.get_all_active_elections()
@@ -179,6 +169,16 @@ class MainAppFrame(tk.Frame):
 
         election = db.get_election_by_id(election_id)
         
+        # KIỂM TRA MẬT KHẨU PHÒNG TRƯỚC KHI VÀO
+        real_password = election.get('room_password')
+        if real_password:  # Nếu phòng có cài mật khẩu (không rỗng và không NULL)
+            entered_pass = simpledialog.askstring("Yêu cầu Mật khẩu", f"Phòng '{election_name}' có mật khẩu.\nVui lòng nhập để vào:", parent=self, show='*')
+            if entered_pass is None: # Nhấn Cancel
+                return
+            if entered_pass != real_password:
+                messagebox.showerror("Lỗi", "Sai mật khẩu phòng! Bạn không được phép vào.")
+                return
+        
         popup = tk.Toplevel(self)
         popup.title(f"Phòng bỏ phiếu: {election_name}")
         popup.geometry("450x350")
@@ -194,7 +194,6 @@ class MainAppFrame(tk.Frame):
         
         if election.get('vote_type') == 'fixed':
             tk.Label(frame_input, text="Vui lòng chọn 1 trong các lựa chọn sau:", font=("Arial", 11)).pack(anchor="w", pady=5)
-            # Thêm check an toàn nếu options bị rỗng
             options_str = election.get('options', '')
             if options_str:
                 options_list = [opt.strip() for opt in options_str.split(',')]
@@ -227,13 +226,12 @@ class MainAppFrame(tk.Frame):
             if db.submit_vote(CURRENT_USER['id'], election_id, cipher_ballot, voter_key['n'], voter_sig):
                 messagebox.showinfo("Thành công", "Chốt phiếu thành công! Dữ liệu đã được mã hóa an toàn.", parent=popup)
                 popup.destroy() 
-                self.load_public_elections() # Tải lại bảng sau khi vote
+                self.load_public_elections() 
             else:
                 messagebox.showerror("Lỗi", "Có lỗi xảy ra khi gửi phiếu tới Database.", parent=popup)
                 
         tk.Button(popup, text="🚀 CHỐT PHIẾU", bg="#D32F2F", fg="white", 
                   font=("Arial", 12, "bold"), command=submit_popup_vote).pack(pady=10)
-
 
     # ================= TAB 2: QUẢN LÝ PHÒNG =================
     def setup_manage_tab(self):
@@ -252,7 +250,12 @@ class MainAppFrame(tk.Frame):
         self.room_options_entry = tk.Entry(create_frame, width=30, state="disabled")
         self.room_options_entry.grid(row=2, column=1, sticky="w", pady=5)
 
-        tk.Button(create_frame, text="Tạo Phòng", bg="#D32F2F", fg="white", command=self.create_room).grid(row=0, column=2, rowspan=3, padx=15)
+        # THÊM Ô NHẬP PASSWORD PHÒNG Ở ĐÂY
+        tk.Label(create_frame, text="Mật khẩu phòng (Tùy chọn):").grid(row=3, column=0, sticky="w", pady=5)
+        self.room_pass_entry = tk.Entry(create_frame, width=30)
+        self.room_pass_entry.grid(row=3, column=1, sticky="w", pady=5)
+
+        tk.Button(create_frame, text="Tạo Phòng", bg="#D32F2F", fg="white", command=self.create_room).grid(row=0, column=2, rowspan=4, padx=15)
 
         list_frame = tk.LabelFrame(self.tab_manage, text="Phòng do tôi làm Chủ", padx=10, pady=10)
         list_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -279,7 +282,6 @@ class MainAppFrame(tk.Frame):
             self.room_options_entry.config(state="disabled")
 
     def load_my_elections(self):
-        """Hàm load danh sách phòng của tôi (đã được khôi phục)"""
         for item in self.tree_my_rooms.get_children():
             self.tree_my_rooms.delete(item)
         my_rooms = db.get_my_elections(CURRENT_USER['id'])
@@ -293,6 +295,11 @@ class MainAppFrame(tk.Frame):
         
         vote_type = self.vote_type_var.get()
         options = self.room_options_entry.get().strip() if vote_type == 'fixed' else None
+        
+        # Xử lý mật khẩu
+        room_password = self.room_pass_entry.get().strip()
+        if not room_password:
+            room_password = None
 
         if vote_type == 'fixed' and not options:
             messagebox.showwarning("Lỗi", "Vui lòng nhập các lựa chọn cho phòng!")
@@ -303,16 +310,19 @@ class MainAppFrame(tk.Frame):
         
         key = rabin.rabin_keygen(bits=2048)
         
-        election_id = db.create_election(name, key['n'], CURRENT_USER['id'], vote_type, options)
+        # TRUYỀN THÊM BIẾN MẬT KHẨU VÀO ĐÂY
+        election_id = db.create_election(name, key['n'], CURRENT_USER['id'], vote_type, options, key, room_password)
         
         if election_id:
-            priv_path = config.KEYS_AUTHORITY_DIR / f"priv_election_{election_id}.json"
-            rabin.save_json(key, priv_path)
-            
             self.log_text.insert(tk.END, f"[OK] Tạo phòng thành công! ID = {election_id}\n")
-            self.log_text.insert(tk.END, f"[BẢO MẬT] Đã lưu Private Key tại: {priv_path.name}\n\n")
+            if room_password:
+                self.log_text.insert(tk.END, f"[🔒] Phòng được bảo vệ bằng mật khẩu.\n")
+            self.log_text.insert(tk.END, f"[CLOUD] Khóa Bí Mật đã được mã hóa và đồng bộ lên Server!\n\n")
+            
             self.new_room_entry.delete(0, tk.END)
             self.room_options_entry.delete(0, tk.END)
+            self.room_pass_entry.delete(0, tk.END)
+            
             self.load_my_elections()
             self.load_public_elections()
         else:
@@ -327,12 +337,13 @@ class MainAppFrame(tk.Frame):
         election_id = self.tree_my_rooms.item(selected[0])['values'][0]
         election_name = self.tree_my_rooms.item(selected[0])['values'][1]
         
-        priv_path = config.KEYS_AUTHORITY_DIR / f"priv_election_{election_id}.json"
-        if not priv_path.exists():
-            messagebox.showerror("Lỗi", f"Không tìm thấy Private Key của phòng này!\n({priv_path.name})\nChỉ máy tính tạo phòng mới có thể kiểm phiếu.")
+        election = db.get_election_by_id(election_id)
+        if not election or not election.get('authority_priv'):
+            messagebox.showerror("Lỗi", "Không tìm thấy Khóa Bí Mật của phòng này trên Server!")
             return
             
-        auth_priv = rabin.load_json(priv_path)
+        auth_priv = json.loads(election['authority_priv'])
+        
         pending_votes = db.get_pending_votes(election_id)
         
         self.log_text.insert(tk.END, f"--- BẮT ĐẦU KIỂM PHIẾU PHÒNG: {election_name} ---\n")

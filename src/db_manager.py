@@ -89,17 +89,16 @@ def get_my_elections(user_id):
     finally:
         conn.close()
 
-def create_election(name, authority_pub_n, creator_id, vote_type='free', options=None):
-    """Tạo phòng bỏ phiếu mới với luật chơi và trả về ID của phòng đó"""
+def create_election(name, authority_pub_n, creator_id, vote_type='free', options=None, authority_priv=None, room_password=None):
+    """Tạo phòng bỏ phiếu mới lưu cả luật chơi, Khóa và Mật khẩu lên Cloud"""
     conn = get_connection()
     if not conn: return None
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        # Bổ sung vote_type và options vào câu lệnh SQL INSERT
         cursor.execute("""
-            INSERT INTO elections (name, authority_pub_n, creator_id, is_active, vote_type, options) 
-            VALUES (%s, %s, %s, TRUE, %s, %s) RETURNING id
-        """, (name, authority_pub_n, creator_id, vote_type, options))
+            INSERT INTO elections (name, authority_pub_n, creator_id, is_active, vote_type, options, authority_priv, room_password) 
+            VALUES (%s, %s, %s, TRUE, %s, %s, %s, %s) RETURNING id
+        """, (name, authority_pub_n, creator_id, vote_type, options, json.dumps(authority_priv), room_password))
         new_id = cursor.fetchone()['id']
         conn.commit()
         return new_id
