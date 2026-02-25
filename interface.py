@@ -117,7 +117,7 @@ class MainAppFrame(tk.Frame):
         self.setup_manage_tab()
 
     def on_show(self):
-        self.lbl_header.config(text=f"Xin chào: {CURRENT_USER['full_name']} | Role: {CURRENT_USER['role']}")
+        self.lbl_header.config(text=f"Xin chào: {CURRENT_USER['full_name']}")
         self.load_public_elections()
         self.load_my_elections()
 
@@ -143,7 +143,7 @@ class MainAppFrame(tk.Frame):
         columns = ("id", "name", "creator")
         self.tree_elections = ttk.Treeview(self.tab_vote, columns=columns, show="headings", height=12)
         self.tree_elections.heading("id", text="ID")
-        self.tree_elections.heading("name", text="Tên Cuộc Bầu Cử")
+        self.tree_elections.heading("name", text="Tên Phòng")
         self.tree_elections.heading("creator", text="Người Tạo")
         self.tree_elections.column("id", width=50)
         self.tree_elections.pack(fill="x", padx=10, pady=10)
@@ -241,7 +241,7 @@ class MainAppFrame(tk.Frame):
 
     # ================= TAB 2: QUẢN LÝ PHÒNG =================
     def setup_manage_tab(self):
-        create_frame = tk.LabelFrame(self.tab_manage, text="Tạo phòng bầu cử mới", padx=10, pady=10)
+        create_frame = tk.LabelFrame(self.tab_manage, text="Tạo phòng mới", padx=10, pady=10)
         create_frame.pack(fill="x", padx=5, pady=5)
         
         tk.Label(create_frame, text="Tên phòng:").grid(row=0, column=0, sticky="w", pady=5)
