@@ -26,7 +26,7 @@ class UserApp:
         self.container.pack(fill="both", expand=True)
         self.frames = {}
         
-        for F in (LoginFrame, MainAppFrame):
+        for F in (LoginFrame, MainAppFrame,AdminAppFrame):
             page_name = F.__name__
             frame = F(parent=self.container, controller=self)
             self.frames[page_name] = frame
@@ -37,7 +37,8 @@ class UserApp:
     def show_frame(self, page_name):
         frame = self.frames[page_name]
         frame.tkraise()
-        if page_name == "MainAppFrame" and CURRENT_USER:
+        # Kích hoạt on_show() cho cả User và Admin
+        if (page_name == "MainAppFrame" or page_name == "AdminAppFrame") and CURRENT_USER:
             frame.on_show()
 
     def on_closing(self):
@@ -72,7 +73,12 @@ class LoginFrame(tk.Frame):
         if user:
             global CURRENT_USER
             CURRENT_USER = user
-            self.controller.show_frame("MainAppFrame")
+            
+            # --- KIỂM TRA ROLE ĐỂ CHUYỂN HƯỚNG ---
+            if CURRENT_USER['role'].upper() == 'ADMIN':
+                self.controller.show_frame("AdminAppFrame")
+            else:
+                self.controller.show_frame("MainAppFrame")
         else:
             messagebox.showerror("Lỗi", "Sai thông tin đăng nhập!")
 
@@ -374,8 +380,105 @@ class MainAppFrame(tk.Frame):
         self.log_text.insert(tk.END, f"-> TỔNG KẾT: {valid_count}/{len(pending_votes)} phiếu hợp lệ.\n\n")
         self.log_text.see(tk.END)
 
+class AdminAppFrame(tk.Frame):
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+        self.controller = controller
+        self.auto_refresh_id = None
+        
+        # Header
+        header_frame = tk.Frame(self)
+        header_frame.pack(fill="x", padx=10, pady=10)
+
+        self.lbl_header = tk.Label(header_frame, text="⚙️ SUPABASE ADMIN DASHBOARD", font=("Arial", 14, "bold"), fg="#D32F2F")
+        self.lbl_header.pack(side=tk.LEFT)
+
+        tk.Button(header_frame, text="🚪 Đăng xuất", bg="#757575", fg="white", 
+                  font=("Arial", 9, "bold"), command=self.do_logout).pack(side=tk.RIGHT)
+        tk.Button(header_frame, text="🔄 Làm mới thủ công", bg="#1976D2", fg="white", 
+                  font=("Arial", 9), command=self.load_all_data).pack(side=tk.RIGHT, padx=10)
+
+        # Tabs
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # TAB 1: USERS
+        self.tab_users = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_users, text="👥 Bảng Users")
+        self.tree_users = ttk.Treeview(self.tab_users, columns=("id", "username", "name", "role", "online"), show="headings")
+        self.tree_users.heading("id", text="ID"); self.tree_users.column("id", width=50, anchor="center")
+        self.tree_users.heading("username", text="Username")
+        self.tree_users.heading("name", text="Full Name")
+        self.tree_users.heading("role", text="Role"); self.tree_users.column("role", width=100, anchor="center")
+        self.tree_users.heading("online", text="Online"); self.tree_users.column("online", width=80, anchor="center")
+        self.tree_users.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # TAB 2: ELECTIONS
+        self.tab_elections = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_elections, text="🗳️ Bảng Elections")
+        self.tree_elections = ttk.Treeview(self.tab_elections, columns=("id", "name", "creator", "type", "active", "pass"), show="headings")
+        self.tree_elections.heading("id", text="ID"); self.tree_elections.column("id", width=50, anchor="center")
+        self.tree_elections.heading("name", text="Tên Phòng")
+        self.tree_elections.heading("creator", text="ID Người tạo"); self.tree_elections.column("creator", width=100, anchor="center")
+        self.tree_elections.heading("type", text="Loại"); self.tree_elections.column("type", width=80, anchor="center")
+        self.tree_elections.heading("active", text="Mở/Đóng"); self.tree_elections.column("active", width=80, anchor="center")
+        self.tree_elections.heading("pass", text="Mật khẩu"); self.tree_elections.column("pass", width=100, anchor="center")
+        self.tree_elections.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # TAB 3: VOTES
+        self.tab_votes = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_votes, text="📨 Bảng Votes")
+        self.tree_votes = ttk.Treeview(self.tab_votes, columns=("id", "user_id", "election_id", "status"), show="headings")
+        self.tree_votes.heading("id", text="Vote ID"); self.tree_votes.column("id", width=80, anchor="center")
+        self.tree_votes.heading("user_id", text="User ID"); self.tree_votes.column("user_id", width=100, anchor="center")
+        self.tree_votes.heading("election_id", text="Election ID"); self.tree_votes.column("election_id", width=100, anchor="center")
+        self.tree_votes.heading("status", text="Trạng thái xử lý"); self.tree_votes.column("status", width=150, anchor="center")
+        self.tree_votes.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def on_show(self):
+        self.lbl_header.config(text=f"⚙️ ADMIN DASHBOARD | Hello: {CURRENT_USER['username']}")
+        self.load_all_data()
+        self.auto_refresh() # Bắt đầu vòng lặp realtime
+
+    def load_all_data(self):
+        # Clear bảng
+        for tree in [self.tree_users, self.tree_elections, self.tree_votes]:
+            for item in tree.get_children():
+                tree.delete(item)
+                
+        # Load Users
+        for u in db.get_all_users_admin():
+            self.tree_users.insert("", "end", values=(u['id'], u['username'], u['full_name'], u['role'], "🟢 Yes" if u['is_online'] else "🔴 No"))
+            
+        # Load Elections
+        for e in db.get_all_elections_admin():
+            has_pass = "Có" if e['room_password'] else "Không"
+            self.tree_elections.insert("", "end", values=(e['id'], e['name'], e['creator_id'], e['vote_type'], "Mở" if e['is_active'] else "Đóng", has_pass))
+            
+        # Load Votes
+        for v in db.get_all_votes_admin():
+            self.tree_votes.insert("", "end", values=(v['id'], v['user_id'], v['election_id'], v['status']))
+
+    def auto_refresh(self):
+        """Tự động cập nhật dữ liệu mỗi 5 giây (Realtime)"""
+        # Chỉ cập nhật nếu Admin đang đăng nhập và ở màn hình này
+        if CURRENT_USER and CURRENT_USER['role'].upper() == 'ADMIN':
+            self.load_all_data()
+            self.auto_refresh_id = self.after(5000, self.auto_refresh)
+
+    def do_logout(self):
+        global CURRENT_USER
+        if self.auto_refresh_id:
+            self.after_cancel(self.auto_refresh_id) # Tắt vòng lặp realtime
+        if CURRENT_USER:
+            db.logout_user(CURRENT_USER['id'])
+            CURRENT_USER = None
+        for tree in [self.tree_users, self.tree_elections, self.tree_votes]:
+            for item in tree.get_children():
+                tree.delete(item)
+        self.controller.show_frame("LoginFrame")
+
 if __name__ == "__main__":
-    config.ensure_structure()
     root = tk.Tk()
     app = UserApp(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)

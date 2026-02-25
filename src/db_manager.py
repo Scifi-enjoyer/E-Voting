@@ -175,3 +175,32 @@ def get_admin_stats():
             "total_elections": total_elections, "total_votes": total_votes
         }
     finally: conn.close()
+
+# --- ADMIN DASHBOARD FUNCTIONS ---
+def get_all_users_admin():
+    conn = get_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT id, username, full_name, role, is_online FROM users ORDER BY id ASC")
+        return cursor.fetchall()
+    finally: conn.close()
+
+def get_all_elections_admin():
+    conn = get_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT id, name, creator_id, is_active, vote_type, room_password FROM elections ORDER BY id ASC")
+        return cursor.fetchall()
+    finally: conn.close()
+
+def get_all_votes_admin():
+    conn = get_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        # Chỉ lấy siêu dữ liệu (metadata), không lấy nội dung mã hóa để bảng đỡ rối
+        cursor.execute("SELECT id, user_id, election_id, status FROM votes ORDER BY id ASC")
+        return cursor.fetchall()
+    finally: conn.close()
