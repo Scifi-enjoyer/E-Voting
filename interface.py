@@ -4,11 +4,8 @@ Giao diện User Đa Năng (Voter + Authority).
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, simpledialog
-import sys, os, time, json
+import sys, os, time, json, csv
 from pathlib import Path
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(project_root)
 
 import config
 import src.db_manager as db
@@ -117,21 +114,40 @@ class MainAppFrame(tk.Frame):
         self.setup_manage_tab()
 
     def on_show(self):
-        self.lbl_header.config(text=f"Xin chào: {CURRENT_USER['full_name']}")
+        self.lbl_header.config(text=f"Xin chào: {CURRENT_USER['full_name']} | Role: {CURRENT_USER['role']}")
         self.load_public_elections()
         self.load_my_elections()
 
     def do_logout(self):
         global CURRENT_USER
         if CURRENT_USER:
+            # Báo cho Database biết user này đã offline
             db.logout_user(CURRENT_USER['id'])
             CURRENT_USER = None
             
+        # 1. XÓA BẢNG: Quét sạch danh sách phòng ở cả 2 Tab
         for item in self.tree_elections.get_children():
             self.tree_elections.delete(item)
         for item in self.tree_my_rooms.get_children():
             self.tree_my_rooms.delete(item)
             
+        # 2. XÓA LOG & BIẾN TẠM: Reset trắng màn hình log kiểm phiếu
+        self.log_text.delete(1.0, tk.END)
+        if hasattr(self, 'current_report_data'):
+            self.current_report_data = [] # Xóa bộ nhớ đệm của file Excel
+            
+        # 3. KHÓA NÚT BẤM: Đưa nút Xuất và Mở file về trạng thái tắt
+        self.btn_export_excel.config(state=tk.DISABLED)
+        self.btn_open_excel.config(state=tk.DISABLED)
+        
+        # 4. DỌN FORM TẠO PHÒNG: Xóa các chữ lỡ gõ dở ở ô tạo phòng
+        self.new_room_entry.delete(0, tk.END)
+        self.room_options_entry.delete(0, tk.END)
+        self.room_pass_entry.delete(0, tk.END)
+        self.vote_type_var.set("free")
+        self.toggle_options()
+            
+        # 5. Chuyển giao diện về lại màn hình Đăng nhập
         self.controller.show_frame("LoginFrame")
 
     # ================= TAB 1: ĐI VOTE =================
@@ -143,11 +159,12 @@ class MainAppFrame(tk.Frame):
         columns = ("id", "name", "creator")
         self.tree_elections = ttk.Treeview(self.tab_vote, columns=columns, show="headings", height=12)
         self.tree_elections.heading("id", text="ID")
-        self.tree_elections.heading("name", text="Tên Phòng")
+        self.tree_elections.heading("name", text="Tên Cuộc Bầu Cử")
         self.tree_elections.heading("creator", text="Người Tạo")
         self.tree_elections.column("id", width=50)
         self.tree_elections.pack(fill="x", padx=10, pady=10)
 
+        from tkinter import simpledialog
         tk.Button(self.tab_vote, text="🚪 VÀO PHÒNG BỎ PHIẾU", bg="#4CAF50", fg="white", 
                   font=("Arial", 12, "bold"), command=self.open_room_popup).pack(pady=10)
         self.tree_elections.bind("<Double-1>", lambda event: self.open_room_popup())
@@ -175,11 +192,11 @@ class MainAppFrame(tk.Frame):
 
         election = db.get_election_by_id(election_id)
         
-        # KIỂM TRA MẬT KHẨU PHÒNG TRƯỚC KHI VÀO
+        from tkinter import simpledialog
         real_password = election.get('room_password')
-        if real_password:  # Nếu phòng có cài mật khẩu (không rỗng và không NULL)
+        if real_password:
             entered_pass = simpledialog.askstring("Yêu cầu Mật khẩu", f"Phòng '{election_name}' có mật khẩu.\nVui lòng nhập để vào:", parent=self, show='*')
-            if entered_pass is None: # Nhấn Cancel
+            if entered_pass is None:
                 return
             if entered_pass != real_password:
                 messagebox.showerror("Lỗi", "Sai mật khẩu phòng! Bạn không được phép vào.")
@@ -241,7 +258,7 @@ class MainAppFrame(tk.Frame):
 
     # ================= TAB 2: QUẢN LÝ PHÒNG =================
     def setup_manage_tab(self):
-        create_frame = tk.LabelFrame(self.tab_manage, text="Tạo phòng mới", padx=10, pady=10)
+        create_frame = tk.LabelFrame(self.tab_manage, text="Tạo phòng bầu cử mới", padx=10, pady=10)
         create_frame.pack(fill="x", padx=5, pady=5)
         
         tk.Label(create_frame, text="Tên phòng:").grid(row=0, column=0, sticky="w", pady=5)
@@ -256,7 +273,6 @@ class MainAppFrame(tk.Frame):
         self.room_options_entry = tk.Entry(create_frame, width=30, state="disabled")
         self.room_options_entry.grid(row=2, column=1, sticky="w", pady=5)
 
-        # THÊM Ô NHẬP PASSWORD PHÒNG Ở ĐÂY
         tk.Label(create_frame, text="Mật khẩu phòng (Tùy chọn):").grid(row=3, column=0, sticky="w", pady=5)
         self.room_pass_entry = tk.Entry(create_frame, width=30)
         self.room_pass_entry.grid(row=3, column=1, sticky="w", pady=5)
@@ -274,8 +290,21 @@ class MainAppFrame(tk.Frame):
         self.tree_my_rooms.column("id", width=50)
         self.tree_my_rooms.pack(fill="x", pady=5)
         
-        tk.Button(list_frame, text="📥 KIỂM PHIẾU PHÒNG ĐÃ CHỌN", bg="#388E3C", fg="white", 
-                  font=("Arial", 10, "bold"), command=self.process_my_room).pack(pady=5)
+        # Bắt sự kiện chọn phòng để kiểm tra trạng thái nút mở file
+        self.tree_my_rooms.bind("<<TreeviewSelect>>", self.on_room_select)
+        
+        # --- CỤM 3 NÚT CHỨC NĂNG ---
+        btn_action_frame = tk.Frame(list_frame)
+        btn_action_frame.pack(pady=5)
+        
+        self.btn_check_votes = tk.Button(btn_action_frame, text="📥 KIỂM PHIẾU", bg="#388E3C", fg="white", font=("Arial", 10, "bold"), command=self.process_my_room)
+        self.btn_check_votes.pack(side=tk.LEFT, padx=5)
+        
+        self.btn_export_excel = tk.Button(btn_action_frame, text="📊 XUẤT EXCEL", bg="#FF9800", fg="white", font=("Arial", 10, "bold"), command=self.export_to_excel, state=tk.DISABLED)
+        self.btn_export_excel.pack(side=tk.LEFT, padx=5)
+        
+        self.btn_open_excel = tk.Button(btn_action_frame, text="📂 MỞ FILE", bg="#1976D2", fg="white", font=("Arial", 10, "bold"), command=self.open_excel_file, state=tk.DISABLED)
+        self.btn_open_excel.pack(side=tk.LEFT, padx=5)
         
         self.log_text = scrolledtext.ScrolledText(list_frame, height=8)
         self.log_text.pack(fill="both", expand=True)
@@ -302,7 +331,6 @@ class MainAppFrame(tk.Frame):
         vote_type = self.vote_type_var.get()
         options = self.room_options_entry.get().strip() if vote_type == 'fixed' else None
         
-        # Xử lý mật khẩu
         room_password = self.room_pass_entry.get().strip()
         if not room_password:
             room_password = None
@@ -316,7 +344,6 @@ class MainAppFrame(tk.Frame):
         
         key = rabin.rabin_keygen(bits=2048)
         
-        # TRUYỀN THÊM BIẾN MẬT KHẨU VÀO ĐÂY
         election_id = db.create_election(name, key['n'], CURRENT_USER['id'], vote_type, options, key, room_password)
         
         if election_id:
@@ -334,6 +361,27 @@ class MainAppFrame(tk.Frame):
         else:
             messagebox.showerror("Lỗi", "Không thể tạo phòng trên DB.")
 
+    # --- CÁC HÀM XỬ LÝ LOGIC EXCEL & KIỂM PHIẾU MỚI ---
+    
+    def on_room_select(self, event):
+        """Kích hoạt khi bấm vào 1 phòng trong danh sách"""
+        selected = self.tree_my_rooms.selection()
+        if not selected:
+            return
+        election_id = self.tree_my_rooms.item(selected[0])['values'][0]
+        
+        # Luôn disable nút Xuất Excel khi vừa chọn phòng mới (vì chưa bấm kiểm phiếu)
+        self.btn_export_excel.config(state=tk.DISABLED)
+        
+        # Check xem phòng này đã từng xuất file trên máy chưa
+        report_dir = config.PROJECT_ROOT / "reports"
+        file_path = report_dir / f"BaoCao_Phong_{election_id}.csv"
+        
+        if file_path.exists():
+            self.btn_open_excel.config(state=tk.NORMAL) # Mở khóa nút Mở file
+        else:
+            self.btn_open_excel.config(state=tk.DISABLED)
+
     def process_my_room(self):
         selected = self.tree_my_rooms.selection()
         if not selected:
@@ -349,36 +397,123 @@ class MainAppFrame(tk.Frame):
             return
             
         auth_priv = json.loads(election['authority_priv'])
+        all_votes = db.get_all_votes_by_election(election_id)
         
-        pending_votes = db.get_pending_votes(election_id)
-        
-        self.log_text.insert(tk.END, f"--- BẮT ĐẦU KIỂM PHIẾU PHÒNG: {election_name} ---\n")
-        self.log_text.insert(tk.END, f"Tìm thấy {len(pending_votes)} phiếu chưa xử lý.\n")
+        self.log_text.insert(tk.END, f"\n========== KẾT QUẢ KIỂM PHIẾU: {election_name} ==========\n")
         
         valid_count = 0
-        for vote in pending_votes:
+        invalid_count = 0
+        tally_results = {}
+        
+        # Biến lưu trữ dữ liệu chi tiết để xuất ra Excel sau đó
+        self.current_report_data = []
+        self.current_election_id = election_id
+        self.current_election_name = election_name
+        
+        for vote in all_votes:
             try:
                 cipher = json.loads(vote['cipher_ballot'])
-                sig = json.loads(vote['voter_sig'])
-                pub_n = {'n': vote['voter_pub_n']}
                 
-                ballot_bytes = rabin.rabin_decrypt_bytes(cipher, auth_priv)
-                ballot_content = json.loads(ballot_bytes.decode('utf-8'))
+                if vote['status'] == 'PENDING':
+                    sig = json.loads(vote['voter_sig'])
+                    pub_n = {'n': vote['voter_pub_n']}
+                    
+                    ballot_bytes = rabin.rabin_decrypt_bytes(cipher, auth_priv)
+                    is_valid = rabin.rabin_verify_bytes(ballot_bytes, sig, pub_n)
+                    
+                    new_status = 'VALID' if is_valid else 'INVALID'
+                    db.update_vote_status(vote['id'], new_status)
+                    vote['status'] = new_status
                 
-                is_valid = rabin.rabin_verify_bytes(ballot_bytes, sig, pub_n)
-                db.update_vote_status(vote['id'], 'VALID' if is_valid else 'INVALID')
-                
-                if is_valid:
+                if vote['status'] == 'VALID':
                     valid_count += 1
-                    self.log_text.insert(tk.END, f"[Hợp lệ] Phiếu #{vote['id']} -> Bầu cho: {ballot_content['choices']}\n")
-                else:
-                    self.log_text.insert(tk.END, f"[Cảnh báo] Phiếu #{vote['id']} -> CHỮ KÝ SAI!\n")
+                    ballot_bytes = rabin.rabin_decrypt_bytes(cipher, auth_priv)
+                    ballot_content = json.loads(ballot_bytes.decode('utf-8'))
+                    choice = ballot_content.get('choices', 'Không rõ')
+                    
+                    if choice in tally_results:
+                        tally_results[choice] += 1
+                    else:
+                        tally_results[choice] = 1
+                        
+                    # Lưu dữ liệu hợp lệ vào biến báo cáo (Không in ra log)
+                    self.current_report_data.append([election_id, election_name, vote['id'], "HỢP LỆ", choice, ""])
+                        
+                elif vote['status'] == 'INVALID':
+                    invalid_count += 1
+                    # Lưu dữ liệu hỏng vào biến báo cáo
+                    self.current_report_data.append([election_id, election_name, vote['id'], "KHÔNG HỢP LỆ", "N/A", "Sai chữ ký hoặc lỗi dữ liệu"])
+                    
             except Exception as e:
-                db.update_vote_status(vote['id'], 'INVALID')
-                self.log_text.insert(tk.END, f"[Lỗi] Phiếu #{vote['id']} -> Lỗi giải mã: {e}\n")
+                if vote['status'] == 'PENDING':
+                    db.update_vote_status(vote['id'], 'INVALID')
+                invalid_count += 1
+                self.current_report_data.append([election_id, election_name, vote['id'], "LỖI KỸ THUẬT", "N/A", str(e)])
                 
-        self.log_text.insert(tk.END, f"-> TỔNG KẾT: {valid_count}/{len(pending_votes)} phiếu hợp lệ.\n\n")
+        self.log_text.insert(tk.END, f"Tổng số phiếu HỢP LỆ: {valid_count}\n")
+        self.log_text.insert(tk.END, f"Tổng số phiếu KHÔNG HỢP LỆ: {invalid_count}\n\n")
+        self.log_text.insert(tk.END, f"🏆 KẾT QUẢ BẦU CỬ CHUNG CUỘC:\n")
+        if not tally_results:
+            self.log_text.insert(tk.END, f"Chưa có phiếu hợp lệ nào.\n")
+        else:
+            for choice, count in tally_results.items():
+                self.log_text.insert(tk.END, f"   ➤ {choice}: {count} phiếu\n")
+        
+        self.log_text.insert(tk.END, f"--------------------------------------------------\n")
+        self.log_text.insert(tk.END, f"Đã có dữ liệu chi tiết của từng lá phiếu.\nVui lòng bấm '📊 XUẤT EXCEL' để lưu và xem chi tiết.\n")
+        self.log_text.insert(tk.END, f"==================================================\n\n")
         self.log_text.see(tk.END)
+        
+        # Kiểm phiếu xong -> Cho phép bấm nút Xuất Excel
+        self.btn_export_excel.config(state=tk.NORMAL)
+
+    def export_to_excel(self):
+        if not hasattr(self, 'current_report_data') or not self.current_report_data:
+            messagebox.showwarning("Lỗi", "Không có dữ liệu để xuất! Vui lòng kiểm phiếu trước.")
+            return
+            
+        election_id = self.current_election_id
+        
+        # Tạo folder reports để lưu trữ cho gọn gàng
+        report_dir = config.PROJECT_ROOT / "reports"
+        report_dir.mkdir(exist_ok=True)
+        file_path = report_dir / f"BaoCao_Phong_{election_id}.csv"
+        
+        try:
+            # Dùng chuẩn utf-8-sig để Excel nhận diện chuẩn tiếng Việt
+            with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Mã Phòng", "Tên Phòng", "Mã Lá Phiếu (Vote ID)", "Trạng Thái", "Lựa Chọn (Nếu Hợp Lệ)", "Ghi Chú"])
+                for row in self.current_report_data:
+                    writer.writerow(row)
+                    
+            self.log_text.insert(tk.END, f"[THÀNH CÔNG] Đã xuất file Audit Log tại: {file_path.name}\n\n")
+            self.log_text.see(tk.END)
+            
+            # Xuất file thành công -> Cho phép bấm nút Mở file
+            self.btn_open_excel.config(state=tk.NORMAL)
+            messagebox.showinfo("Thành công", f"Xuất báo cáo thành công!\nBạn có thể bấm Mở File để xem ngay.")
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể tạo file báo cáo: {e}")
+
+    def open_excel_file(self):
+        selected = self.tree_my_rooms.selection()
+        if not selected:
+            return
+        election_id = self.tree_my_rooms.item(selected[0])['values'][0]
+        
+        report_dir = config.PROJECT_ROOT / "reports"
+        file_path = report_dir / f"BaoCao_Phong_{election_id}.csv"
+        
+        if file_path.exists():
+            try:
+                os.startfile(file_path) # Lệnh này sẽ mở file bằng phần mềm Excel mặc định trên Windows
+            except AttributeError:
+                import subprocess
+                subprocess.call(('open', file_path)) # Dành cho MacOS nếu có lỡ chạy
+        else:
+            messagebox.showerror("Lỗi", "Không tìm thấy file báo cáo!")
 
 class AdminAppFrame(tk.Frame):
     def __init__(self, parent, controller):

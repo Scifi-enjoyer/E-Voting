@@ -147,6 +147,15 @@ def get_pending_votes(election_id):
         cursor.execute("SELECT * FROM votes WHERE election_id = %s AND status = 'PENDING'", (election_id,))
         return cursor.fetchall()
     finally: conn.close()
+    
+def get_all_votes_by_election(election_id):
+    """Lấy toàn bộ phiếu của phòng (cả mới lẫn cũ) để thống kê kết quả"""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT * FROM votes WHERE election_id = %s", (election_id,))
+        return cursor.fetchall()
+    finally: conn.close()
 
 def update_vote_status(vote_id, status):
     conn = get_connection()
