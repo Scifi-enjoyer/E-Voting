@@ -89,16 +89,16 @@ def get_my_elections(user_id):
     finally:
         conn.close()
 
-def create_election(name, authority_pub_n, creator_id, vote_type='free', options=None, authority_priv=None, room_password=None):
-    """Tạo phòng bỏ phiếu mới lưu cả luật chơi, Khóa và Mật khẩu lên Cloud"""
+def create_election(name, authority_pub_n, creator_id, vote_type='free', options=None, authority_priv=None, room_password=None, end_time=None):
+    """Tạo phòng có tính năng hẹn giờ đóng cửa"""
     conn = get_connection()
     if not conn: return None
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            INSERT INTO elections (name, authority_pub_n, creator_id, is_active, vote_type, options, authority_priv, room_password) 
-            VALUES (%s, %s, %s, TRUE, %s, %s, %s, %s) RETURNING id
-        """, (name, authority_pub_n, creator_id, vote_type, options, json.dumps(authority_priv), room_password))
+            INSERT INTO elections (name, authority_pub_n, creator_id, is_active, vote_type, options, authority_priv, room_password, end_time) 
+            VALUES (%s, %s, %s, TRUE, %s, %s, %s, %s, %s) RETURNING id
+        """, (name, authority_pub_n, creator_id, vote_type, options, json.dumps(authority_priv), room_password, end_time))
         new_id = cursor.fetchone()['id']
         conn.commit()
         return new_id
@@ -212,4 +212,32 @@ def get_all_votes_admin():
         # Chỉ lấy siêu dữ liệu (metadata), không lấy nội dung mã hóa để bảng đỡ rối
         cursor.execute("SELECT id, user_id, election_id, status FROM votes ORDER BY id ASC")
         return cursor.fetchall()
+    finally: conn.close()
+
+def toggle_election_status(election_id, new_status):
+    """Bật/Tắt trạng thái hoạt động của phòng"""
+    conn = get_connection()
+    if not conn: return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE elections SET is_active = %s WHERE id = %s", (new_status, election_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Toggle status: {e}")
+        return False
+    finally: conn.close()
+
+def delete_election(election_id):
+    """Xóa hoàn toàn phòng bỏ phiếu (Các phiếu sẽ tự động bay màu nhờ CASCADE)"""
+    conn = get_connection()
+    if not conn: return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM elections WHERE id = %s", (election_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[ERROR] Delete election: {e}")
+        return False
     finally: conn.close()

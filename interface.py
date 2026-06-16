@@ -6,6 +6,7 @@ Giao diện User Đa Năng (Voter + Authority).
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import sys, os, time, json, csv
+from datetime import datetime
 import threading # THƯ VIỆN ĐA LUỒNG
 from pathlib import Path
 
@@ -243,7 +244,21 @@ class MainAppFrame(ttk.Frame):
             return
 
         election = db.get_election_by_id(election_id)
-        
+        # 1. Chặn nếu phòng bị khóa thủ công
+        if not election.get('is_active'):
+            messagebox.showerror("Từ chối", "Phòng bỏ phiếu này đã bị Chủ phòng đóng cửa!")
+            return
+            
+        # 2. Chặn nếu quá thời gian hẹn giờ
+        end_time_str = election.get('end_time')
+        if end_time_str:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if current_time > end_time_str:
+                messagebox.showerror("Hết hạn", f"Cuộc bầu cử này đã kết thúc vào lúc {end_time_str}!\nBạn không thể bỏ phiếu nữa.")
+                # Tự động update trạng thái khóa luôn cho tiện
+                db.toggle_election_status(election_id, False)
+                self.load_public_elections()
+                return
         real_password = election.get('room_password')
         if real_password:
             entered_pass = simpledialog.askstring("Xác thực", f"Phòng '{election_name}' yêu cầu mật khẩu:\n", parent=self, show='•')
@@ -254,42 +269,58 @@ class MainAppFrame(ttk.Frame):
         
         popup = tk.Toplevel(self)
         popup.title("Bỏ phiếu ẩn danh")
-        popup.geometry("500x400")
+        popup.geometry("550x500") # Mở rộng không gian hiển thị ban đầu
+        popup.minsize(500, 400)   # Đặt giới hạn không cho phép thu nhỏ quá mức
         popup.configure(bg="#FFFFFF")
         popup.grab_set() 
         
         tk.Label(popup, text=f"🗳️ {election_name}", font=("Segoe UI", 16, "bold"), fg="#1976D2", bg="#FFFFFF").pack(pady=(20,5))
         tk.Label(popup, text=f"Chủ phòng: {host_name}", font=("Segoe UI", 10, "italic"), fg="#65676B", bg="#FFFFFF").pack()
         
-        frame_input = tk.Frame(popup, bg="#FFFFFF")
-        frame_input.pack(pady=20, fill="x", padx=40)
+        # --- NEO NÚT BẤM XUỐNG DƯỚI CÙNG (Để nó không bao giờ bị đè) ---
+        btn_submit_vote = tk.Button(popup, text="🚀 CHỐT PHIẾU (MÃ HÓA)", bg="#D32F2F", fg="white", font=("Segoe UI", 12, "bold"), 
+                  relief=tk.FLAT, cursor="hand2", padx=20, pady=8)
+        btn_submit_vote.pack(side=tk.BOTTOM, pady=(10, 20))
+
+        # --- TẠO KHUNG CÓ THANH CUỘN DÀNH CHO CÁC LỰA CHỌN ---
+        container = tk.Frame(popup, bg="#FFFFFF")
+        container.pack(fill="both", expand=True, padx=30, pady=10) # expand=True giúp khu vực này tự chiếm hết khoảng trống ở giữa
         
-        # 1. Gắn biến thẳng vào popup để tránh bị Python tự động "dọn rác"
+        canvas = tk.Canvas(container, bg="#FFFFFF", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        frame_input = tk.Frame(canvas, bg="#FFFFFF")
+        
+        # Lệnh ma thuật giúp Canvas tự co giãn theo chiều cao của tất cả lựa chọn
+        frame_input.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=frame_input, anchor="nw", width=460)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # --- LOGIC XỬ LÝ LỰA CHỌN ---
         popup.choice_var = tk.StringVar(popup)
         
         if election.get('vote_type') == 'fixed':
-            # 2. Set một giá trị KHÔNG TỒN TẠI để ép Tkinter xóa toàn bộ dấu tích
             popup.choice_var.set("___UNSELECTED___")
-            
             tk.Label(frame_input, text="Lựa chọn của bạn:", font=("Segoe UI", 11, "bold"), bg="#FFFFFF").pack(anchor="w", pady=(0, 10))
+            
             options_str = election.get('options', '')
             if options_str:
                 options_list = [opt.strip() for opt in options_str.split(',')]
                 for opt in options_list:
-                    tk.Radiobutton(frame_input, text=opt, variable=popup.choice_var, value=opt, font=("Segoe UI", 11), bg="#FFFFFF", activebackground="#FFFFFF", cursor="hand2").pack(anchor="w", pady=5)
+                    # Wraplength=420 giúp câu chữ dài tự động xuống dòng không bị cắt chữ
+                    tk.Radiobutton(frame_input, text=opt, variable=popup.choice_var, value=opt, 
+                                   font=("Segoe UI", 11), bg="#FFFFFF", activebackground="#FFFFFF", 
+                                   cursor="hand2", wraplength=420, justify="left").pack(anchor="w", pady=5)
         else:
-            # Nếu là nhập tự do, set chuỗi rỗng để ô textbox không bị dính chữ lạ
             popup.choice_var.set("")
-            
             tk.Label(frame_input, text="Nhập ý kiến bỏ phiếu:", font=("Segoe UI", 11, "bold"), bg="#FFFFFF").pack(anchor="w", pady=(0, 10))
-            entry = tk.Entry(frame_input, textvariable=popup.choice_var, font=("Segoe UI", 12), width=40, relief=tk.SOLID, bd=1)
-            entry.pack(pady=5, ipady=6)
+            entry = tk.Entry(frame_input, textvariable=popup.choice_var, font=("Segoe UI", 12), relief=tk.SOLID, bd=1)
+            entry.pack(fill="x", pady=5, ipady=6, padx=(0, 20))
             
         def submit_popup_vote():
-            # Lấy giá trị user chọn
             choice = popup.choice_var.get().strip()
-            
-            # Chặn đứng nếu user chưa chọn gì (dính giá trị mặc định) hoặc bỏ trống
             if not choice or choice == "___UNSELECTED___":
                 messagebox.showwarning("Cảnh báo", "Vui lòng đưa ra quyết định trước khi chốt phiếu!", parent=popup)
                 return
@@ -323,12 +354,11 @@ class MainAppFrame(ttk.Frame):
                 popup.destroy() 
                 self.load_public_elections() 
             else:
-                btn_submit_vote.config(state=tk.NORMAL, text="Bỏ phiếu")
+                btn_submit_vote.config(state=tk.NORMAL, text="🚀 CHỐT PHIẾU (MÃ HÓA)")
                 messagebox.showerror("Lỗi", f"Có lỗi xảy ra: {error_msg}", parent=popup)
 
-        btn_submit_vote = tk.Button(popup, text="Bỏ phiếu", bg="#D32F2F", fg="white", font=("Segoe UI", 12, "bold"), 
-                  relief=tk.FLAT, cursor="hand2", padx=20, pady=8, command=submit_popup_vote)
-        btn_submit_vote.pack(pady=15)
+        # Gán lệnh thực thi vào nút bấm
+        btn_submit_vote.config(command=submit_popup_vote)
 
     # ================= TAB 2: QUẢN LÝ PHÒNG =================
     def setup_manage_tab(self):
@@ -353,9 +383,14 @@ class MainAppFrame(ttk.Frame):
         self.room_pass_entry = tk.Entry(create_frame, font=("Segoe UI", 11), width=35, relief=tk.SOLID, bd=1)
         self.room_pass_entry.grid(row=3, column=1, sticky="w", pady=5, ipady=3)
 
+        # THÊM Ô NHẬP HẸN GIỜ ĐÓNG CỬA
+        tk.Label(create_frame, text="Hạn chót (YYYY-MM-DD HH:MM):", font=("Segoe UI", 10), bg="#FFFFFF").grid(row=4, column=0, sticky="w", pady=5)
+        self.room_deadline_entry = tk.Entry(create_frame, font=("Segoe UI", 11), width=35, relief=tk.SOLID, bd=1)
+        self.room_deadline_entry.grid(row=4, column=1, sticky="w", pady=5, ipady=3)
+
         self.btn_create_room = tk.Button(create_frame, text="TẠO PHÒNG", bg="#1976D2", fg="white", font=("Segoe UI", 11, "bold"), 
                   relief=tk.FLAT, cursor="hand2", command=self.create_room)
-        self.btn_create_room.grid(row=0, column=2, rowspan=4, padx=30, ipadx=10, ipady=15)
+        self.btn_create_room.grid(row=0, column=2, rowspan=5, padx=30, ipadx=10, ipady=15)
 
         list_frame = ttk.LabelFrame(self.tab_manage, text=" 📊 Quản lý và Kiểm phiếu ", padding=15)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -376,12 +411,19 @@ class MainAppFrame(ttk.Frame):
         
         self.btn_check_votes = tk.Button(btn_action_frame, text="📥 KIỂM PHIẾU (GIẢI MÃ)", bg="#388E3C", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.process_my_room)
         self.btn_check_votes.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 2 NÚT MỚI: KHÓA VÀ XÓA PHÒNG
+        self.btn_toggle_room = tk.Button(btn_action_frame, text="🔒 KHÓA/MỞ PHÒNG", bg="#757575", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.toggle_room, state=tk.DISABLED)
+        self.btn_toggle_room.pack(side=tk.LEFT, padx=10)
+        
+        self.btn_delete_room = tk.Button(btn_action_frame, text="🗑️ XÓA PHÒNG", bg="#D32F2F", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.delete_room, state=tk.DISABLED)
+        self.btn_delete_room.pack(side=tk.LEFT, padx=10)
         
         self.btn_export_excel = tk.Button(btn_action_frame, text="📊 XUẤT BÁO CÁO", bg="#FF9800", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.export_to_excel, state=tk.DISABLED)
-        self.btn_export_excel.pack(side=tk.LEFT, padx=10)
+        self.btn_export_excel.pack(side=tk.RIGHT, padx=(10, 0))
         
-        self.btn_open_excel = tk.Button(btn_action_frame, text="📂 MỞ FILE EXCEL", bg="#1976D2", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.open_excel_file, state=tk.DISABLED)
-        self.btn_open_excel.pack(side=tk.LEFT, padx=10)
+        self.btn_open_excel = tk.Button(btn_action_frame, text="📂 MỞ FILE", bg="#1976D2", fg="white", font=("Segoe UI", 10, "bold"), relief=tk.FLAT, cursor="hand2", padx=10, pady=5, command=self.open_excel_file, state=tk.DISABLED)
+        self.btn_open_excel.pack(side=tk.RIGHT, padx=10)
         
         self.log_text = scrolledtext.ScrolledText(list_frame, height=6, font=("Consolas", 10), bg="#F8F9FA", relief=tk.SOLID, bd=1)
         self.log_text.pack(fill="both", expand=True, pady=(15, 0))
@@ -410,51 +452,93 @@ class MainAppFrame(ttk.Frame):
         room_password = self.room_pass_entry.get().strip()
         if not room_password: room_password = None
 
+        # Bắt lỗi thời gian nhập vào
+        end_time = self.room_deadline_entry.get().strip()
+        if end_time:
+            try:
+                datetime.strptime(end_time, "%Y-%m-%d %H:%M")
+            except ValueError:
+                messagebox.showerror("Lỗi", "Định dạng thời gian không đúng!\nVui lòng nhập chuẩn: YYYY-MM-DD HH:MM\nVí dụ: 2026-12-31 23:59")
+                return
+        else:
+            end_time = None
+
         if vote_type == 'fixed' and not options:
             messagebox.showwarning("Lỗi", "Vui lòng nhập các lựa chọn cho phòng!")
             return
         
-        # Disable nút để không bị bấm đúp
         self.btn_create_room.config(state=tk.DISABLED, text="ĐANG TẠO...")
         self.log_text.insert(tk.END, f"[*] Đang sinh Master Key (Rabin) cho phòng '{name}' ở luồng nền...\n")
         self.log_text.see(tk.END)
         
-        threading.Thread(target=self._thread_create_room, args=(name, vote_type, options, room_password), daemon=True).start()
+        # TRUYỀN THÊM end_time VÀO THREAD
+        threading.Thread(target=self._thread_create_room, args=(name, vote_type, options, room_password, end_time), daemon=True).start()
 
-    def _thread_create_room(self, name, vote_type, options, room_password):
+    def _thread_create_room(self, name, vote_type, options, room_password, end_time):
         try:
             key = rabin.rabin_keygen(bits=2048)
-            election_id = db.create_election(name, key['n'], CURRENT_USER['id'], vote_type, options, key, room_password)
-            self.after(0, lambda: self._on_create_room_done(True, election_id, room_password))
+            election_id = db.create_election(name, key['n'], CURRENT_USER['id'], vote_type, options, key, room_password, end_time)
+            self.after(0, lambda: self._on_create_room_done(True, election_id, room_password, end_time))
         except Exception as e:
-            self.after(0, lambda: self._on_create_room_done(False, str(e), None))
+            self.after(0, lambda: self._on_create_room_done(False, str(e), None, None))
 
-    def _on_create_room_done(self, success, result, room_password):
+    def _on_create_room_done(self, success, result, room_password, end_time):
         self.btn_create_room.config(state=tk.NORMAL, text="TẠO PHÒNG")
         if success:
             election_id = result
             self.log_text.insert(tk.END, f"[OK] Tạo phòng thành công! ID = {election_id}\n")
             if room_password: self.log_text.insert(tk.END, f"[🔒] Phòng được bảo mật bằng mật khẩu.\n")
-            self.log_text.insert(tk.END, f"[☁️] Khóa Bí Mật đã được bọc và đồng bộ an toàn lên Cloud!\n\n")
+            if end_time: self.log_text.insert(tk.END, f"[⏰] Tự động đóng cửa bỏ phiếu sau: {end_time}.\n")
             self.log_text.see(tk.END)
             
             self.new_room_entry.delete(0, tk.END)
             self.room_options_entry.delete(0, tk.END)
             self.room_pass_entry.delete(0, tk.END)
+            self.room_deadline_entry.delete(0, tk.END)
             self.load_my_elections()
             self.load_public_elections()
         else:
             messagebox.showerror("Lỗi", f"Không thể tạo phòng: {result}")
+
+    # HÀM XỬ LÝ KHÓA VÀ XÓA
+    def toggle_room(self):
+        selected = self.tree_my_rooms.selection()
+        if not selected: return
+        election_id = self.tree_my_rooms.item(selected[0])['values'][0]
+        status_text = self.tree_my_rooms.item(selected[0])['values'][2]
+        
+        new_status = False if status_text == "Đang mở" else True
+        if db.toggle_election_status(election_id, new_status):
+            msg = "Khóa phòng" if not new_status else "Mở lại phòng"
+            self.log_text.insert(tk.END, f"[*] Đã {msg} thành công cho ID: {election_id}\n")
+            self.load_my_elections()
+            self.load_public_elections()
+
+    def delete_room(self):
+        selected = self.tree_my_rooms.selection()
+        if not selected: return
+        election_id = self.tree_my_rooms.item(selected[0])['values'][0]
+        election_name = self.tree_my_rooms.item(selected[0])['values'][1]
+        
+        confirm = messagebox.askyesno("Cảnh báo nguy hiểm", f"Bạn có chắc chắn muốn xóa phòng '{election_name}'?\nToàn bộ phiếu bầu cũng sẽ bị xóa và không thể khôi phục!")
+        if confirm:
+            if db.delete_election(election_id):
+                self.log_text.insert(tk.END, f"[🗑️] Đã xóa phòng '{election_name}' (ID: {election_id})\n")
+                self.load_my_elections()
+                self.load_public_elections()
 
     def on_room_select(self, event):
         selected = self.tree_my_rooms.selection()
         if not selected: return
         election_id = self.tree_my_rooms.item(selected[0])['values'][0]
         
+        # Mở khóa 2 nút thao tác
+        self.btn_toggle_room.config(state=tk.NORMAL)
+        self.btn_delete_room.config(state=tk.NORMAL)
+        
         self.btn_export_excel.config(state=tk.DISABLED)
         report_dir = config.PROJECT_ROOT / "reports"
         file_path = report_dir / f"BaoCao_Phong_{election_id}.csv"
-        
         if file_path.exists():
             self.btn_open_excel.config(state=tk.NORMAL)
         else:
